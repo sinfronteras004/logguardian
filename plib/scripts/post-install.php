@@ -2,13 +2,13 @@
 /**
  * post-install.php
  * 
- * Este script se ejecuta automáticamente después de instalar o actualizar
- * la extensión LogGuardianSF en Plesk.
+ * This script runs automatically after installing or updating
+ * the LogGuardianSF extension in Plesk.
  *
- * Su función es:
- *  - Crear las tareas CRON (parser y notifier)
- *  - Asegurar permisos de ejecución en los scripts
- *  - Registrar mensajes en el log de instalación
+ * It performs the following tasks:
+ *  - Creates the CRON jobs (parser and notifier)
+ *  - Ensures execution permissions on the scripts
+ *  - Logs actions during installation
  */
 
 date_default_timezone_set('UTC');
@@ -16,41 +16,41 @@ date_default_timezone_set('UTC');
 $basePath = '/usr/local/psa/admin/plib/modules/LogGuardianSF';
 $logFile  = "$basePath/install_log.txt";
 
-// Registrar log
+// Helper function for logging
 function logMessage($msg) {
     global $logFile;
     file_put_contents($logFile, "[" . date('Y-m-d H:i:s') . "] " . $msg . "\n", FILE_APPEND);
     echo $msg . "\n";
 }
 
-logMessage("=== Iniciando instalación automática de LogGuardianSF ===");
+logMessage("=== Starting automatic installation of LogGuardianSF ===");
 
-// Detectar versión PHP disponible (prioriza 8.3, luego 8.2)
+// Detect available PHP version (prefers 8.3, then 8.2)
 $phpBinary = null;
 if (file_exists('/opt/plesk/php/8.3/bin/php')) {
     $phpBinary = '/opt/plesk/php/8.3/bin/php';
 } elseif (file_exists('/opt/plesk/php/8.2/bin/php')) {
     $phpBinary = '/opt/plesk/php/8.2/bin/php';
 } else {
-    logMessage("⚠️  No se encontró PHP 8.2/8.3 en /opt/plesk/php/. Las tareas no se crearán.");
+    logMessage("⚠️  PHP 8.2 or 8.3 not found in /opt/plesk/php/. CRON jobs will not be created.");
     exit(1);
 }
 
-logMessage("Usando binario PHP: $phpBinary");
+logMessage("Using PHP binary: $phpBinary");
 
 // ===============================
-// Crear tareas programadas (CRON)
+// Create scheduled tasks (CRON)
 // ===============================
 $tasks = [
     [
         'name'     => 'LogGuardianSF Parser',
         'command'  => "$phpBinary $basePath/scripts/parser.php",
-        'schedule' => '*/10 * * * *', // cada 10 minutos
+        'schedule' => '*/10 * * * *', // every 10 minutes
     ],
     [
         'name'     => 'LogGuardianSF Notifier',
         'command'  => "$phpBinary $basePath/scripts/notifier.php",
-        'schedule' => '0 * * * *', // cada hora
+        'schedule' => '0 * * * *', // every hour
     ],
 ];
 
@@ -60,13 +60,13 @@ foreach ($tasks as $task) {
          . "-cmd '{$task['command']}' "
          . "-enabled true 2>&1";
 
-    logMessage("Creando tarea CRON: {$task['name']}");
+    logMessage("Creating CRON task: {$task['name']}");
     $output = shell_exec($cmd);
     logMessage($output);
 }
 
 // ===============================
-// Asignar permisos de ejecución
+// Set execution permissions
 // ===============================
 $scripts = [
     "$basePath/scripts/parser.php",
@@ -76,10 +76,10 @@ $scripts = [
 foreach ($scripts as $script) {
     if (file_exists($script)) {
         chmod($script, 0755);
-        logMessage("Permisos asignados correctamente a: $script");
+        logMessage("Execution permissions set for: $script");
     } else {
-        logMessage("⚠️  No se encontró el script: $script");
+        logMessage("⚠️  Script not found: $script");
     }
 }
 
-logMessage("✅ Instalación automática completada.");
+logMessage("✅ Automatic installation completed successfully.");
