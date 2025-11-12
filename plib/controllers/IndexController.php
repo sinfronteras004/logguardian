@@ -1,6 +1,6 @@
 <?php
 
-pm_Context::init('LogGuardianSF'); // 👈 Esto garantiza que el módulo se registre
+pm_Context::init('LogGuardianSF_v1'); // 👈 Esto garantiza que el módulo se registre
 
 class IndexController extends pm_Controller_Action
 {
