@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<module>
+  <id>LogGuardianSF</id>
+  <name>LogGuardianSF - Recent Activity Monitor</name>
+  <description>
+    LogGuardianSF is a monitoring tool that allows you to review, filter, and analyze server activity logs 
+    to detect suspicious access attempts, HTTP errors, and unusual traffic patterns. 
+    Compatible with Plesk Obsidian 18.0.69 and later.
+  </description>
+
+  <version>1.0</version>
+  <release>1</release>
+
+  <vendor>Your Name or Company</vendor>
+  <url>https://www.gnu.org/licenses/gpl-3.0.html</url>
+
+  <!-- License declaration -->
+  <license>GPL-3.0-or-later</license>
+
+  <!-- Minimum supported Plesk version -->
+  <plesk_min_version>18.0.69</plesk_min_version>
+</module>

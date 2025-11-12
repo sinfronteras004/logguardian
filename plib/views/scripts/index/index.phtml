@@ -1,0 +1,223 @@
+<?php
+
+
+define('MJ_APIKEY_PUBLIC', 'cb96eabcdf3b93eab20a4302c4c5ce70');
+define('MJ_APIKEY_PRIVATE', 'bb8d828a52bcf974efa528d05882e29b');
+define('MJ_SENDER_EMAIL', 'alertas@sinfronteras.dedyn.io');
+define('MJ_RECIPIENT_EMAIL', 'sinfronteras004@gmail.com');
+
+
+$today = new DateTime('now', new DateTimeZone(date_default_timezone_get()));
+$todayStr = $today->format('d/m/Y');
+
+$base  = pm_Context::getBaseUrl();
+
+$fromDate = isset($this->fromDate) && $this->fromDate !== '' ? $this->fromDate : $todayStr;
+$toDate   = isset($this->toDate) && $this->toDate !== '' ? $this->toDate : $todayStr;
+
+$currentFilters = [];
+if (!empty($this->ipFilter)) $currentFilters[] = 'ip=' . urlencode($this->ipFilter);
+if (!empty($this->codeFilter)) $currentFilters[] = 'code=' . urlencode($this->codeFilter);
+if (!empty($this->keywordFilter)) $currentFilters[] = 'keyword=' . urlencode($this->keywordFilter);
+$currentFilters[] = 'from=' . urlencode($fromDate);
+$currentFilters[] = 'to=' . urlencode($toDate);
+$filterQuery = implode('&', $currentFilters);
+?>
+
+<form method="get" style="margin-bottom:10px;">
+    <label for="from">From:</label>
+    <input type="text" id="from" name="from" value="<?= htmlspecialchars($fromDate) ?>" placeholder="dd/mm/aaaa" style="width:100px;">
+    <label for="to">To:</label>
+    <input type="text" id="to" name="to" value="<?= htmlspecialchars($toDate) ?>" placeholder="dd/mm/aaaa" style="width:100px;">
+    IP: <input type="text" name="ip" value="<?= htmlspecialchars($this->ipFilter ?? '') ?>" placeholder="Enter IP" style="width:120px;">
+    Code: <input type="text" name="code" value="<?= htmlspecialchars($this->codeFilter ?? '') ?>" placeholder="HTTP code" style="width:80px;">
+    Search: <input type="text" name="keyword" value="<?= htmlspecialchars($this->keywordFilter ?? '') ?>" placeholder="Keyword" style="width:120px;">
+    <button type="submit" class="btn btn-primary">Filter</button>
+    <button type="button" class="btn btn-secondary" onclick="window.location='index.php';">Clear</button>
+</form>
+
+
+<p style="font-size:11px;color:#555;">
+    Rango local: <?= htmlspecialchars($this->fromDateLocal ?? '') ?> 00:00:00 → <?= htmlspecialchars($this->toDateLocal ?? '') ?> 23:59:59
+    | Equivalente UTC: <?= htmlspecialchars($this->fromDateUTC ?? '') ?> 00:00:00 → <?= htmlspecialchars($this->toDateUTC ?? '') ?> 23:59:59
+</p>
+
+<div style="background:#fff4e5;border-left:4px solid #ffa500;padding:8px;margin-bottom:10px;">
+    <strong>Debug info:</strong> Using file: <em>/var/modules/logguardianSF/logguardian_data.log</em><br>
+    Reading <?= htmlspecialchars($this->totalLines ?? 0) ?> lines<br>
+    Discarded (invalid format): <?= htmlspecialchars($this->invalidLines ?? 0) ?><br>
+    Showing <?= htmlspecialchars(count($this->entries ?? [])) ?> logs (filtered view)
+</div>
+
+<p><strong>Activity Summary:</strong>
+    Total: <a href="?<?= htmlspecialchars($filterQuery) ?>" style="text-decoration:none;color:#000;"><?= htmlspecialchars($this->totalAll ?? 0) ?></a> |
+    <a href="?<?= htmlspecialchars($filterQuery) ?>&summary=errors" style="color:red;text-decoration:none;">Errors: <?= htmlspecialchars($this->errorCount ?? 0) ?></a> |
+    <a href="?<?= htmlspecialchars($filterQuery) ?>&summary=suspicious" style="color:#e0a800;text-decoration:none;">Suspicious IPs: <?= htmlspecialchars($this->suspiciousCount ?? 0) ?></a>
+    <?php if (!empty($this->summaryFilter)): ?>
+        | <a href="?<?= htmlspecialchars($filterQuery) ?>" style="color:#007bff;text-decoration:none;">Show All</a>
+    <?php endif; ?>
+</p>
+
+<style>
+table.logguardian {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin-top: 10px;
+}
+table.logguardian th,
+table.logguardian td {
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 1px solid #ddd;
+}
+table.logguardian th {
+    background-color: #e6f2ff;
+    border-bottom: 2px solid #ccc;
+}
+table.logguardian td:first-child {
+    white-space: nowrap;
+}
+table.logguardian tr:hover {
+    background-color: #f9f9f9;
+}
+.btn-block {
+    background-color: #c9302c;
+    color: white;
+    border: none;
+    padding: 3px 7px;
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 3px;
+}
+.btn-block:hover {
+    background-color: #a30000;
+}
+</style>
+
+<?php
+if (isset($_POST['block_ip']) && !empty($_POST['block_ip'])) {
+    $ip = trim($_POST['block_ip']);
+    $msg = '';
+    $css = 'background:#fff4e5;border-left:4px solid #ffa500;color:#333;padding:10px;margin-bottom:15px;';
+    
+    if (filter_var($ip, FILTER_VALIDATE_IP)) {
+        $cmd = "/usr/bin/sudo /usr/sbin/ipset add blacklist1 " . escapeshellarg($ip) . " timeout 86400 -exist 2>&1";
+        exec($cmd, $out, $rc);
+        if ($rc === 0) {
+            $msg = "✅ <strong>Éxito:</strong> La IP <b>$ip</b> fue bloqueada correctamente.";
+            $css = 'background:#e6ffed;border-left:4px solid #28a745;color:#155724;padding:10px;margin-bottom:15px;';
+	    
+           // --- Enviar correo con Mailjet sin SDK ---
+    	   $apiKey = MJ_APIKEY_PUBLIC;
+    	   $apiSecret = MJ_APIKEY_PRIVATE;
+
+	   $body = [
+        	'Messages' => [[
+            		'From' => ['Email' => MJ_SENDER_EMAIL, 'Name' => 'LogGuardianSF'],
+            		'To'   => [['Email' => MJ_RECIPIENT_EMAIL, 'Name' => 'Administrador']],
+            		'Subject' => '🚨 IP bloqueda correctamente',
+            		'HTMLPart' => "
+                		<h3>Se ha bloqueado una IP sospechosa</h3>
+                		<p><strong>IP:</strong> {$ip}</p>
+                		<p><strong>Fecha:</strong> " . date('d/m/Y H:i:s') . "</p>
+                		<p>Bloqueo ejecutado desde LogGuardianSF.</p>"
+        	]]
+    	    ];
+
+	    $ch = curl_init();
+    	    curl_setopt($ch, CURLOPT_URL, 'https://api.mailjet.com/v3.1/send');
+   	    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    	    curl_setopt($ch, CURLOPT_POST, true);
+    	    curl_setopt($ch, CURLOPT_USERPWD, "$apiKey:$apiSecret");
+    	    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body));
+    	    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+    	    $response = curl_exec($ch);
+    	    $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    	    curl_close($ch);
+
+    	    if ($status === 200) {
+        	$msg .= "<br>📧 <em>Correo de alerta enviado correctamente.</em>";
+    	    } else {
+        	$msg .= "<br>⚠️ <em>Error al enviar correo (HTTP $status):</em> <pre>" .
+                	htmlspecialchars($response) . "</pre>";
+    	    }
+
+        } else {
+            $msg = "❌ <strong>Error:</strong> No se pudo ejecutar <code>ipset</code>.<br><pre>" . htmlspecialchars(implode("\n", $out)) . "</pre>";
+            $css = 'background:#ffe6e6;border-left:4px solid #dc3545;color:#721c24;padding:10px;margin-bottom:15px;';
+        }
+    } else {
+        $msg = "⚠️ <strong>IP inválida:</strong> " . htmlspecialchars($ip);
+        $css = 'background:#fff3cd;border-left:4px solid #ffc107;color:#856404;padding:10px;margin-bottom:15px;';
+    }
+    echo "<div style='$css'>$msg</div>";
+}
+?>
+
+
+
+
+<table class="logguardian">
+    <thead>
+        <tr>
+            <th style="width:220px;">Date / Time<br><small>(Local / UTC)</small></th>
+            <th style="width:200px;">Domain</th>
+            <th style="width:180px;">IP / Action</th>
+            <th style="width:80px;">Method</th>
+            <th style="width:250px;">Request</th>
+            <th style="width:60px;">Code</th>
+            <th style="width:60px;">Size</th>
+            <th style="width:200px;">Referer</th>
+            <th>User-Agent</th>
+        </tr>
+    </thead>
+    <tbody>
+        <?php
+        if (!empty($this->entries)) {
+            usort($this->entries, function ($a, $b) {
+                return strtotime($b['datetime_local']) <=> strtotime($a['datetime_local']);
+            });
+
+            foreach ($this->entries as $row): ?>
+                <tr>
+                    <td>
+                        <strong><?= htmlspecialchars($row['datetime_local']) ?></strong><br>
+                        <small style="color:#555;">UTC <?= htmlspecialchars($row['datetime_utc']) ?></small>
+                    </td>
+                    <td><?= htmlspecialchars($row['domain']) ?></td>
+		    
+	    	    <td>
+  			<span style="font-family:monospace; color:#333; margin-right:6px;">
+    				<?= htmlspecialchars($row['ip']) ?>
+  			</span>
+  			<form method="post" style="display:inline;">
+    				<input type="hidden" name="block_ip" value="<?= htmlspecialchars($row['ip']) ?>">
+    				<button type="submit" class="btn-block"
+            				onclick="return confirm('¿Seguro que deseas bloquear la IP <?= htmlspecialchars($row['ip']) ?>?');">
+      				  Block
+    				</button>
+  			</form>
+		    </td>
+
+                    <td><?= htmlspecialchars($row['method']) ?></td>
+                    <td><?= htmlspecialchars($row['request']) ?></td>
+                    <td><?= htmlspecialchars($row['code']) ?></td>
+                    <td><?= htmlspecialchars($row['size']) ?></td>
+                    <td><?= htmlspecialchars($row['referer']) ?></td>
+                    <td><?= htmlspecialchars($row['agent']) ?></td>
+                </tr>
+            <?php endforeach;
+        } else { ?>
+            <tr><td colspan="9" style="text-align:center;color:#888;">No logs found for the selected period.</td></tr>
+        <?php } ?>
+    </tbody>
+</table>
+
+<script>const baseUrl = '<?= $base ?>';</script>
+
+
+<div style="margin:50px 0 30px 0; padding-top:10px; border-top:1px solid #ddd; font-size:11px; color:#999; text-align:center; font-style:italic;">
+    Released under <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" style="color:#0078d7; text-decoration:none;">GPL v3.0</a>
+</div>
+
