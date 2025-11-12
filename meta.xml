@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <module>
-  <id>LogGuardianSF_v1</id>
+  <id>LogGuardianSF</id>
   <name>LogGuardianSF - Recent Activity Monitor</name>
   <description>
     LogGuardianSF is a monitoring tool that allows you to review, filter, and analyze server activity logs 
