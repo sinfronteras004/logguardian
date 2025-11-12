@@ -11,7 +11,7 @@
   <version>1.0</version>
   <release>1</release>
 
-  <vendor>Your Name or Company</vendor>
+  <vendor>Sin Fronteras</vendor>
   <url>https://www.gnu.org/licenses/gpl-3.0.html</url>
 
   <!-- License declaration -->
@@ -19,4 +19,9 @@
 
   <!-- Minimum supported Plesk version -->
   <plesk_min_version>18.0.69</plesk_min_version>
+
+  <install-scripts>
+    <post-install>scripts/post-install.php</post-install>
+  </install-scripts>
+  
 </module>
