@@ -14,10 +14,10 @@ return [
     // =============================
     
     // Tu dirección de Gmail que enviará las notificaciones
-    'gmail_username' => 'eugenia.delgado.castillo@est.una.ac.cr',  // ← CAMBIAR
+    'gmail_username' => 'sinfronteras004@gmail.com',  // ← CAMBIAR
     
     // App Password (16 caracteres) - NO uses tu contraseña normal
-    'gmail_password' => 'vqud relc vnni atcj',  // ← CAMBIAR por tu App Password
+    'gmail_password' => 'czhb hcdu zzii klbb',  // ← CAMBIAR por tu App Password
     
     // =============================
     // DESTINATARIOS
