@@ -1,14 +1,9 @@
 <?php
 /**
- * LogGuardianSF Parser v3.8 ENTERPRISE - Universal Multi-Plesk
- * Compatible con múltiples versiones de Plesk y configuraciones
- * Auto-detecta estructura de directorios y formatos de log
+ * LogGuardianSF Parser v3.9 FINAL - Universal + ModSecurity Critical Detection
+ * Combina: Patrones amplios de v3.8 + Detección ModSecurity mejorada
  */
-
-// ============================================================================
-// CONFIGURACIÓN AUTO-DETECTABLE
-// ============================================================================
-
+$vhosts_base = '/var/www/vhosts';
 $data_dir = '/var/modules/logguardianSF';
 
 // Crear directorio si no existe
@@ -16,35 +11,16 @@ if (!is_dir($data_dir)) {
     @mkdir($data_dir, 0755, true);
 }
 
-// Detectar ubicación base de vhosts automáticamente
-$possible_vhost_bases = [
-    '/var/www/vhosts',           // Plesk en Linux estándar
-    '/usr/local/psa/var/vhosts', // Plesk versiones antiguas
-    '/home/vhosts',              // Algunas configuraciones personalizadas
-];
-
-$vhosts_base = null;
-foreach ($possible_vhost_bases as $base) {
-    if (is_dir($base) && is_readable($base)) {
-        $vhosts_base = $base;
-        break;
-    }
-}
-
-if (!$vhosts_base) {
-    die("✗ ERROR: No se pudo detectar la ubicación de vhosts de Plesk\n");
-}
-
-// Patrones de búsqueda ampliados
+// PATRONES AMPLIOS DE v3.8 - Máxima compatibilidad
 $log_name_patterns = [
     'access',
     'access_log',
-    'access-log',
+    'access-log',              // v3.8
     'access_ssl_log',
-    'access_ssl',
+    'access_ssl',              // v3.8
     'error',
     'error_log',
-    'error-log',
+    'error-log',               // v3.8
     'error_ssl_log',
     'proxy',
     'proxy_access',
@@ -53,21 +29,17 @@ $log_name_patterns = [
     'proxy_error_log',
     'ssl_access_log',
     'ssl_error_log',
-    'httpd_access',
-    'httpd_error',
-    'nginx_access',
-    'nginx_error'
+    'httpd_access',            // v3.8 - Apache
+    'httpd_error',             // v3.8 - Apache
+    'nginx_access',            // v3.8 - Nginx
+    'nginx_error'              // v3.8 - Nginx
 ];
 
-// Configuración
+// Configuración general
 $retention_days = 7;
 $alert_error_threshold = 10;
 $critical_error_threshold = 20;
 $suspicious_ip_threshold = 2;
-
-// ============================================================================
-// FUNCIONES DE UTILIDAD
-// ============================================================================
 
 function logError($msg) {
     global $data_dir;
@@ -75,28 +47,8 @@ function logError($msg) {
     file_put_contents("$data_dir/parser_errors.log", "[$ts] $msg\n", FILE_APPEND);
 }
 
-function logDebug($msg) {
-    global $data_dir;
-    $ts = date('Y-m-d H:i:s');
-    file_put_contents("$data_dir/parser_debug.log", "[$ts] $msg\n", FILE_APPEND);
-}
-
 /* ---------------------------------------------------
- * Detectar versión de Plesk
- * --------------------------------------------------- */
-function detectPleskVersion() {
-    $version_file = '/usr/local/psa/version';
-    if (file_exists($version_file)) {
-        $content = file_get_contents($version_file);
-        if (preg_match('/^(\d+\.\d+)/', $content, $m)) {
-            return $m[1];
-        }
-    }
-    return 'unknown';
-}
-
-/* ---------------------------------------------------
- * Buscar logs en múltiples ubicaciones posibles
+ * Buscar dominios - v3.8 style (múltiples ubicaciones)
  * --------------------------------------------------- */
 function findDomains($base, $patterns) {
     $result = [];
@@ -106,8 +58,6 @@ function findDomains($base, $patterns) {
         return $result;
     }
     
-    logDebug("Buscando dominios en: $base");
-    
     foreach (scandir($base) ?: [] as $dir) {
         if ($dir[0] === '.' || $dir === 'system' || $dir === 'default' || $dir === 'chroot') {
             continue;
@@ -116,48 +66,28 @@ function findDomains($base, $patterns) {
         $domain_path = "$base/$dir";
         if (!is_dir($domain_path)) continue;
         
-        // Lista de posibles ubicaciones de logs para cada dominio
+        // Múltiples ubicaciones posibles (v3.8)
         $possible_log_locations = [
-            "$domain_path/logs",                    // Ubicación estándar
-            "$base/system/$dir/logs",               // Ubicación system
-            "$domain_path/statistics/logs",         // Logs de estadísticas
-            "$domain_path/var/log",                 // Ubicación alternativa
+            "$domain_path/logs",
+            "$base/system/$dir/logs",
+            "$domain_path/statistics/logs",
+            "$domain_path/var/log",
         ];
         
         foreach ($possible_log_locations as $path) {
             if (!is_dir($path) || !is_readable($path)) continue;
             
-            logDebug("Escaneando: $path");
-            
             foreach (scandir($path) ?: [] as $file) {
-                // Saltar archivos comprimidos por ahora
+                // Saltar archivos comprimidos
                 if (preg_match('/\.(gz|bz2|zip)$/i', $file)) {
                     continue;
                 }
                 
-                // Buscar coincidencia con patrones
                 foreach ($patterns as $p) {
                     if (stripos($file, $p) !== false) {
                         $f = "$path/$file";
-                        $size = @filesize($f);
-                        
-                        // Solo agregar si es legible y tiene contenido
-                        if (is_file($f) && is_readable($f) && $size > 0) {
-                            // Marcar ubicación especial
-                            $location_type = 'standard';
-                            if (strpos($path, '/system/') !== false) {
-                                $location_type = 'system';
-                            } elseif (strpos($path, '/statistics/') !== false) {
-                                $location_type = 'statistics';
-                            }
-                            
-                            $result[$dir][] = [
-                                'path' => $f,
-                                'size' => $size,
-                                'type' => $location_type
-                            ];
-                            
-                            logDebug("Encontrado: $f ($size bytes) [$location_type]");
+                        if (is_file($f) && is_readable($f) && filesize($f) > 0) {
+                            $result[$dir][] = $f;
                             break;
                         }
                     }
@@ -170,7 +100,7 @@ function findDomains($base, $patterns) {
 }
 
 /* ---------------------------------------------------
- * Procesar log de acceso con múltiples formatos
+ * Procesar log de acceso - v3.8 style
  * --------------------------------------------------- */
 function processAccessLog($domain, $file, $posfile) {
     $entries = [];
@@ -187,14 +117,10 @@ function processAccessLog($domain, $file, $posfile) {
     
     fseek($fp, $last);
     
-    // Múltiples patrones de regex para diferentes formatos
+    // Múltiples patrones (v3.8)
     $patterns = [
-        // Apache/Nginx Combined Log Format
         '/^(\S+) \S+ \S+ \[(.*?)\] "([A-Z]+) ([^"]*) HTTP\/[\d.]+" (\d{3}) (\S+)(?: "([^"]*)" "([^"]*)")?/',
-        // Apache Common Log Format
         '/^(\S+) \S+ \S+ \[(.*?)\] "([A-Z]+) ([^"]*) HTTP\/[\d.]+" (\d{3}) (\S+)/',
-        // Nginx error log con IP
-        '/^(\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}) .*?client: (\S+)/',
     ];
     
     while (($line = fgets($fp)) !== false) {
@@ -204,13 +130,10 @@ function processAccessLog($domain, $file, $posfile) {
             if (preg_match($regex, $line, $m)) {
                 $matched = true;
                 
-                // Extraer datos según el formato
                 if (count($m) >= 7) {
-                    // Formato completo
                     [$ip, $dt, $method, $url, $code, $bytes, $ref, $ua] =
                         [$m[1], $m[2], $m[3], $m[4], (int)$m[5], $m[6], $m[7] ?? '-', $m[8] ?? '-'];
                 } else {
-                    // Formato simplificado
                     $ip = $m[1];
                     $dt = $m[2] ?? date('d/M/Y:H:i:s O');
                     $method = $m[3] ?? '-';
@@ -224,9 +147,8 @@ function processAccessLog($domain, $file, $posfile) {
                 $ts = date('Y-m-d H:i:s', strtotime($dt));
                 $entries[] = "$ts | $domain | $ip | $method | $url | $code | $bytes | $ref | $ua\n";
                 
-                // Análisis de amenazas
                 $is_error = in_array($code, [400,401,403,404,405,408,429,500,502,503]);
-                $is_tool = preg_match('/sqlmap|wpscan|burp|acunetix|nmap|masscan|nikto|metasploit|havij|grabber/i', $ua);
+                $is_tool = preg_match('/sqlmap|wpscan|burp|acunetix|nmap|masscan|nikto|metasploit|havij|grabber|nessus|openvas|qualys|nexpose|rapid7/i', $ua);
                 $is_bot = ($ref === '-' && preg_match('/bot|crawler|spider|scraper|scanner/i', $ua));
                 
                 if ($is_error || $is_tool || $is_bot) {
@@ -239,11 +161,6 @@ function processAccessLog($domain, $file, $posfile) {
                 break;
             }
         }
-        
-        // Si no coincide con ningún patrón, registrar para debug
-        if (!$matched && strlen(trim($line)) > 10) {
-            logDebug("Línea no procesada en $file: " . substr($line, 0, 100));
-        }
     }
     
     file_put_contents($posfile, ftell($fp));
@@ -253,7 +170,7 @@ function processAccessLog($domain, $file, $posfile) {
 }
 
 /* ---------------------------------------------------
- * Procesar log de errores
+ * Procesar log de errores - v3.9 MEJORADO con ModSecurity
  * --------------------------------------------------- */
 function processErrorLog($domain, $file, $posfile) {
     $entries = [];
@@ -270,34 +187,68 @@ function processErrorLog($domain, $file, $posfile) {
     
     fseek($fp, $last);
     
+    // Lista ampliada de herramientas de hacking
+    $attack_tools = [
+        'sqlmap', 'nikto', 'wpscan', 'burp', 'acunetix', 
+        'nmap', 'masscan', 'metasploit', 'havij', 'grabber',
+        'nessus', 'openvas', 'qualys', 'nexpose', 'rapid7',
+        'w3af', 'skipfish', 'arachni', 'zap', 'vega'
+    ];
+    
     while (($line = fgets($fp)) !== false) {
-        // Múltiples formatos de error log
-        $patterns = [
-            '/\[(.*?)\].*?client[:\s]+(\S+)/',           // Apache error log
-            '/^(\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}).*?client: (\S+)/', // Nginx error
-        ];
-        
         $matched = false;
-        foreach ($patterns as $regex) {
-            if (preg_match($regex, $line, $m)) {
-                $dt = $m[1];
-                $ip = $m[2];
-                $ts = date('Y-m-d H:i:s', strtotime($dt));
-                
-                $entries[] = "$ts | $domain | $ip | ERROR | - | - | - | - | " . trim($line) . "\n";
-                
+        
+        // PATRÓN 1: ModSecurity blocking con client IP (CRÍTICO para v3.9)
+        if (preg_match('/\[(.*?)\].*?\[client\s+(\S+?):\d*\].*?ModSecurity/i', $line, $m)) {
+            $dt = $m[1];
+            $ip = $m[2];
+            $ts = date('Y-m-d H:i:s', strtotime($dt));
+            
+            // Detectar herramienta de hacking
+            $is_attack_tool = false;
+            $detected_tool = '';
+            foreach ($attack_tools as $tool) {
+                if (stripos($line, $tool) !== false) {
+                    $is_attack_tool = true;
+                    $detected_tool = $tool;
+                    break;
+                }
+            }
+            
+            if ($is_attack_tool) {
+                $entries[] = "$ts | $domain | $ip | BLOCKED | MODSECURITY | - | - | - | Herramienta detectada: $detected_tool\n";
                 $errors[$ip]['times'][] = strtotime($dt);
-                $errors[$ip]['flags'][] = 'error';
-                
+                $errors[$ip]['flags'][] = 'tool';
+                $errors[$ip]['flags'][] = 'modsecurity_block';
                 $matched = true;
-                break;
+            } else {
+                $entries[] = "$ts | $domain | $ip | BLOCKED | MODSECURITY | - | - | - | ModSecurity block\n";
+                $errors[$ip]['times'][] = strtotime($dt);
+                $errors[$ip]['flags'][] = 'modsecurity_block';
+                $matched = true;
             }
         }
-        
-        if (!$matched && strlen(trim($line)) > 10) {
-            // Error sin IP identificable
-            $ts = date('Y-m-d H:i:s');
-            $entries[] = "$ts | $domain | - | ERROR | - | - | - | - | " . trim($line) . "\n";
+        // PATRÓN 2: Error log estándar con client
+        elseif (preg_match('/\[(.*?)\].*?client[:\s]+(\S+)/', $line, $m)) {
+            $dt = $m[1];
+            $ip = $m[2];
+            $ts = date('Y-m-d H:i:s', strtotime($dt));
+            
+            $entries[] = "$ts | $domain | $ip | ERROR | - | - | - | - | " . substr($line, 0, 200) . "\n";
+            $errors[$ip]['times'][] = strtotime($dt);
+            $errors[$ip]['flags'][] = 'error';
+            $matched = true;
+        }
+        // PATRÓN 3: Nginx error log
+        elseif (preg_match('/^(\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}).*?client: (\S+)/', $line, $m)) {
+            $dt = $m[1];
+            $ip = $m[2];
+            $ts = date('Y-m-d H:i:s', strtotime($dt));
+            
+            $entries[] = "$ts | $domain | $ip | ERROR | NGINX | - | - | - | " . substr($line, 0, 200) . "\n";
+            $errors[$ip]['times'][] = strtotime($dt);
+            $errors[$ip]['flags'][] = 'error';
+            $matched = true;
         }
     }
     
@@ -321,7 +272,7 @@ function processLog($domain, $file, $posfile) {
 }
 
 /* ---------------------------------------------------
- * Analizar y generar alertas
+ * Analizar errores - v3.9 MEJORADO
  * --------------------------------------------------- */
 function analyzeAlerts($domain, $errors) {
     global $data_dir, $alert_error_threshold, $critical_error_threshold;
@@ -339,11 +290,22 @@ function analyzeAlerts($domain, $errors) {
         
         $ts = date('Y-m-d H:i:s');
         
-        if ($count >= $critical_error_threshold || in_array('tool', $flags)) {
-            $msg = "$ts | [$domain] $ip | errores recientes ($count en 10min), posible herramienta o ataque crítico detectado\n";
+        // CRÍTICO: herramienta O ModSecurity block O muchos errores
+        if (in_array('tool', $flags) || in_array('modsecurity_block', $flags) || $count >= $critical_error_threshold) {
+            $reason = '';
+            if (in_array('tool', $flags)) {
+                $reason = "herramienta de ataque detectada";
+            } elseif (in_array('modsecurity_block', $flags)) {
+                $reason = "bloqueado por ModSecurity (posible ataque)";
+            } else {
+                $reason = "$count errores en 10 minutos";
+            }
+            
+            $msg = "$ts | [$domain] $ip | CRÍTICO: $reason\n";
             file_put_contents($crit_file, $msg, FILE_APPEND);
             $criticals++;
-        } elseif ($count >= $alert_error_threshold || in_array('bot', $flags)) {
+        } 
+        elseif ($count >= $alert_error_threshold || in_array('bot', $flags)) {
             $msg = "$ts | [$domain] $ip | actividad sospechosa ($count errores/10min)\n";
             file_put_contents($alert_file, $msg, FILE_APPEND);
             $alerts++;
@@ -353,48 +315,43 @@ function analyzeAlerts($domain, $errors) {
     return [$alerts, $criticals];
 }
 
-// ============================================================================
-// EJECUCIÓN PRINCIPAL
-// ============================================================================
-
+/* ---------------------------------------------------
+ * MAIN EXECUTION
+ * --------------------------------------------------- */
 try {
-    $plesk_version = detectPleskVersion();
-    
-    echo "=== LogGuardianSF v3.8 ENTERPRISE ===\n";
-    echo "Sistema: Plesk $plesk_version\n";
-    echo "Ubicación vhosts: $vhosts_base\n";
-    echo "Patrones de búsqueda: " . count($log_name_patterns) . " patrones\n\n";
+    echo "=== LogGuardianSF v3.9 FINAL - Universal + ModSecurity ===\n";
+    echo "Buscando logs en: $vhosts_base\n";
+    echo "Patrones: " . count($log_name_patterns) . " tipos de log\n";
+    echo "Ubicaciones: /logs, /system/logs, /statistics/logs, /var/log\n";
+    echo "Detección: ModSecurity + Herramientas + Bots\n\n";
     
     $domains = findDomains($vhosts_base, $log_name_patterns);
     
     if (!$domains) {
-        echo "⚠ ADVERTENCIA: No se encontraron logs procesables.\n";
-        echo "\nPosibles causas:\n";
-        echo "  • No hay dominios configurados en Plesk\n";
-        echo "  • Los logs están en ubicaciones no estándar\n";
-        echo "  • Permisos insuficientes\n";
-        echo "\nRevisa: $data_dir/parser_debug.log\n";
+        echo "⚠ ADVERTENCIA: No se encontraron logs.\n";
         exit(1);
     }
     
-    echo "Dominios encontrados: " . count($domains) . "\n\n";
-    
-    $total = 0;
-    $alerts = 0;
-    $criticals = 0;
+    $total = 0; 
+    $alerts = 0; 
+    $criticals = 0; 
     $suspicious = 0;
     $datafile = "$data_dir/logguardian_data.log";
     
     foreach ($domains as $domain => $logs) {
-        echo "--- Procesando: $domain ---\n";
+        echo "--- Procesando dominio: $domain ---\n";
         
-        foreach ($logs as $log_info) {
-            $log = $log_info['path'];
+        foreach ($logs as $log) {
             $logname = basename($log);
-            $type = $log_info['type'];
-            $size = $log_info['size'];
+            $logpath = dirname($log);
+            echo "  Procesando: $logname";
             
-            echo "  $logname [$type] (" . number_format($size) . " bytes) ... ";
+            if (strpos($logpath, '/system/') !== false) {
+                echo " [system]";
+            } elseif (strpos($logpath, '/statistics/') !== false) {
+                echo " [stats]";
+            }
+            echo " ... ";
             
             $pos = "$data_dir/position_" . md5($log) . ".txt";
             [$entries, $errors] = processLog($domain, $log, $pos);
@@ -427,12 +384,10 @@ try {
     echo "  → Datos: $datafile\n";
     echo "  → Alertas: $data_dir/logguardian_alerts.log\n";
     echo "  → Críticos: $data_dir/logguardian_critical.log\n";
-    echo "  → Debug: $data_dir/parser_debug.log\n";
     
 } catch (Throwable $e) {
-    logError("Error fatal: " . $e->getMessage() . "\n" . $e->getTraceAsString());
-    echo "✗ ERROR FATAL: " . $e->getMessage() . "\n";
-    echo "Revisa: $data_dir/parser_errors.log\n";
+    logError("Error fatal: " . $e->getMessage());
+    echo "✗ ERROR: " . $e->getMessage() . "\n";
     exit(1);
 }
 ?>
