@@ -121,7 +121,7 @@ if (isset($_POST['block_ip']) && !empty($_POST['block_ip'])) {
 
 	
     if (filter_var($ip, FILTER_VALIDATE_IP)) {
-        $cmd = "/usr/bin/sudo /usr/sbin/ipset add blacklist1 " . escapeshellarg($ip) . " timeout 86400 -exist 2>&1";
+        $cmd = "/usr/bin/sudo /usr/sbin/ipset add blacklist1 " . escapeshellarg($ip) . " -exist 2>&1";
         exec($cmd, $out, $rc);
         if ($rc === 0) {
             $msg = "✅ <strong>Éxito:</strong> La IP <b>$ip</b> fue bloqueada correctamente.";
