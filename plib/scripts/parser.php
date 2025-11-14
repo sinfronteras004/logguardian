@@ -132,7 +132,8 @@ function processAccessLog($domain, $file, $posfile) {
 
     fseek($fp, $last);
 
-    $regex = '/^(\S+) \S+ \S+ \[(.*?)\] "([A-Z]+) ([^"]*) HTTP\/[\d.]+" (\d{3}) (\S+)(?: "([^"]*)" "([^"]*)")?/';
+    //$regex = '/^(\S+) \S+ \S+ \[(.*?)\] "([A-Z]+) ([^"]*) HTTP\/[\d.]+" (\d{3}) (\S+)(?: "([^"]*)" "([^"]*)")?/';
+    $regex = '/^(\S+) \S+ \S+ \[(.*?)\] "([A-Z]+) (.*?) (HTTP\/[\d\.]+|HTTP\/\d)" (\d{3}) (\S+) "([^"]*)" "([^"]*)"/';
 
     while (($line = fgets($fp)) !== false) {
 
