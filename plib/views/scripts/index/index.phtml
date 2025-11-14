@@ -100,7 +100,26 @@ if (isset($_POST['block_ip']) && !empty($_POST['block_ip'])) {
     $ip = trim($_POST['block_ip']);
     $msg = '';
     $css = 'background:#fff4e5;border-left:4px solid #ffa500;color:#333;padding:10px;margin-bottom:15px;';
-    
+
+	// 1. Verificar si blacklist1 existe
+	$checkCmd = "/usr/bin/sudo /usr/sbin/ipset -q list blacklist1";
+	exec($checkCmd, $checkOut, $checkRc);
+
+	// 2. Si NO existe, crearlo
+	if ($checkRc !== 0) {
+    	$createCmd = "/usr/bin/sudo /usr/sbin/ipset create blacklist1 hash:ip -exist";
+    	exec($createCmd, $createOut, $createRc);
+
+    	if ($createRc !== 0) {
+        	echo "<div style='background:#ffe6e6;border-left:4px solid #dc3545;color:#721c24;padding:10px;margin-bottom:15px;'>
+                	❌ <strong>Error crítico:</strong> No se pudo crear el set <b>blacklist1</b>.<br>
+                	<pre>" . htmlspecialchars(implode("\n", $createOut)) . "</pre>
+              	</div>";
+        	return;
+    	}
+	}
+
+	
     if (filter_var($ip, FILTER_VALIDATE_IP)) {
         $cmd = "/usr/bin/sudo /usr/sbin/ipset add blacklist1 " . escapeshellarg($ip) . " timeout 86400 -exist 2>&1";
         exec($cmd, $out, $rc);
