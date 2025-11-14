@@ -32,6 +32,7 @@ return [
     'anthonny.eras.rivera@est.una.ac.cr',
     'eduardo.arias.vargas@est.una.ac.cr',
     'eugenia.delgado.castillo@est.una.ac.cr',
+    'sinfronteras004@gmail.com',
      // 'security@example.com',     // Agregar más si necesitas
     ],
     
