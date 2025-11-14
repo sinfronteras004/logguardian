@@ -19,9 +19,5 @@
 
   <!-- Minimum supported Plesk version -->
   <plesk_min_version>18.0.69</plesk_min_version>
-
-  <install-scripts>
-    <post-install>scripts/post-install.php</post-install>
-  </install-scripts>
   
 </module>
