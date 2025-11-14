@@ -1,18 +1,20 @@
 <?php
 /**
- * LogGuardianSF Parser v3.7 - Multi-Dominio + Múltiples Ubicaciones
- * Compatible con el dashboard (formato "|") y con manejo avanzado de alertas.
- * ACTUALIZADO: Busca logs en /logs Y en /system/domain/logs
+ * LogGuardianSF Parser v3.8 (fix duplicados)
+ * Basado 100% en v3.7 original
+ * Fixes:
+ *   ✔ Manejo correcto de rotación de logs (inode)
+ *   ✔ Reinicio del offset cuando el log se trunca o rota
+ *   ✔ Nunca volver a procesar líneas previas
  */
+
 $vhosts_base = '/var/www/vhosts';
 $data_dir = '/var/modules/logguardianSF';
 
-// Crear directorio si no existe
 if (!is_dir($data_dir)) {
     @mkdir($data_dir, 0755, true);
 }
 
-// Patrones comunes de logs - ACTUALIZADO para incluir error_log
 $log_name_patterns = [
     'access',
     'access_log', 
@@ -29,11 +31,10 @@ $log_name_patterns = [
     'ssl_error_log'
 ];
 
-// Configuración general
 $retention_days = 7;
-$alert_error_threshold = 10;      // errores 4xx/5xx para alerta
-$critical_error_threshold = 20;   // errores en 10 min = CRÍTICO
-$suspicious_ip_threshold = 2;     // patrones sospechosos mínimos
+$alert_error_threshold = 10;
+$critical_error_threshold = 20;
+$suspicious_ip_threshold = 2;
 
 function logError($msg) {
     global $data_dir;
@@ -41,90 +42,112 @@ function logError($msg) {
     file_put_contents("$data_dir/parser_errors.log", "[$ts] $msg\n", FILE_APPEND);
 }
 
-/* ---------------------------------------------------
- * Buscar todos los dominios con logs accesibles
- * ACTUALIZADO: Busca en AMBAS ubicaciones
- * --------------------------------------------------- */
+/* ================================================
+ * FIX PRINCIPAL: Leer offset seguro con inode
+ * ================================================ */
+function getSafeOffset($file, $posfile) {
+
+    $inode_file = $posfile . "_inode";
+    $current_inode = fileinode($file);
+    $saved_inode = file_exists($inode_file) ? (int)file_get_contents($inode_file) : 0;
+
+    // Rotación detectada → reiniciar
+    if ($saved_inode !== $current_inode) {
+        file_put_contents($inode_file, $current_inode);
+        return 0;
+    }
+
+    // Leer offset guardado
+    $last = file_exists($posfile) ? (int)file_get_contents($posfile) : 0;
+
+    // Si el log se achicó (truncado/rotado), reiniciar
+    $size = filesize($file);
+    if ($last > $size) $last = 0;
+
+    file_put_contents($inode_file, $current_inode);
+
+    return $last;
+}
+
+/* ================================================
+ * Buscar todos los logs del dominio
+ * ================================================ */
 function findDomains($base, $patterns) {
+
     $result = [];
-    
+
     if (!is_dir($base) || !is_readable($base)) {
         logError("No se puede acceder a $base");
-        return $result;
+        return [];
     }
-    
+
     foreach (scandir($base) ?: [] as $dir) {
         if ($dir[0] === '.' || $dir === 'system') continue;
-        
-        // UBICACIÓN 1: /var/www/vhosts/domain/logs/
+
         $path1 = "$base/$dir/logs";
-        
-        // UBICACIÓN 2: /var/www/vhosts/system/domain/logs/
         $path2 = "$base/system/$dir/logs";
-        
-        $paths_to_check = [];
-        if (is_dir($path1) && is_readable($path1)) {
-            $paths_to_check[] = $path1;
-        }
-        if (is_dir($path2) && is_readable($path2)) {
-            $paths_to_check[] = $path2;
-        }
-        
-        foreach ($paths_to_check as $path) {
+
+        $paths = [];
+
+        if (is_dir($path1)) $paths[] = $path1;
+        if (is_dir($path2)) $paths[] = $path2;
+
+        foreach ($paths as $path) {
             foreach (scandir($path) ?: [] as $file) {
-                // Buscar coincidencia con cualquier patrón
                 foreach ($patterns as $p) {
                     if (stripos($file, $p) !== false) {
+
                         $f = "$path/$file";
-                        // Solo agregar si el archivo tiene contenido
+
                         if (is_file($f) && is_readable($f) && filesize($f) > 0) {
                             $result[$dir][] = $f;
-                            break; // Evitar duplicados si coincide con múltiples patrones
                         }
+
+                        break;
                     }
                 }
             }
         }
     }
-    
+
     return $result;
 }
 
-/* ---------------------------------------------------
- * Procesar un log de ACCESO y extraer errores/sospechas
- * --------------------------------------------------- */
+/* ================================================
+ * Procesar ACCESS LOG
+ * ================================================ */
 function processAccessLog($domain, $file, $posfile) {
+
     $entries = [];
     $errors = [];
     $size = @filesize($file);
-    
+
     if (!$size) return [$entries, $errors];
-    
-    $last = file_exists($posfile) ? (int)file_get_contents($posfile) : 0;
-    if ($last > $size) $last = 0;
-    
+
+    // FIX antiduplicados
+    $last = getSafeOffset($file, $posfile);
+
     $fp = @fopen($file, 'r');
     if (!$fp) return [$entries, $errors];
-    
+
     fseek($fp, $last);
-    
-    // Regex para logs de acceso estilo Apache/Nginx
+
     $regex = '/^(\S+) \S+ \S+ \[(.*?)\] "([A-Z]+) ([^"]*) HTTP\/[\d.]+" (\d{3}) (\S+)(?: "([^"]*)" "([^"]*)")?/';
-    
-    $line_count = 0;
+
     while (($line = fgets($fp)) !== false) {
-        $line_count++;
+
         if (preg_match($regex, $line, $m)) {
+
             [$ip, $dt, $method, $url, $code, $bytes, $ref, $ua] =
                 [$m[1], $m[2], $m[3], $m[4], (int)$m[5], $m[6], $m[7] ?? '-', $m[8] ?? '-'];
-            
+
             $ts = date('Y-m-d H:i:s', strtotime($dt));
             $entries[] = "$ts | $domain | $ip | $method | $url | $code | $bytes | $ref | $ua\n";
-            
+
             $is_error = in_array($code, [400,401,403,404,405,408,429,500,502,503]);
-            $is_tool = preg_match('/sqlmap|wpscan|burp|acunetix|nmap|masscan|nikto|metasploit/i', $ua);
-            $is_bot = ($ref === '-' && preg_match('/bot|crawler|spider|scraper/i', $ua));
-            
+            $is_tool  = preg_match('/sqlmap|wpscan|burp|acunetix|nmap|masscan|nikto|metasploit/i', $ua);
+            $is_bot   = ($ref === '-' && preg_match('/bot|crawler|spider|scraper/i', $ua));
+
             if ($is_error || $is_tool || $is_bot) {
                 $errors[$ip]['times'][] = strtotime($dt);
                 if ($is_tool) $errors[$ip]['flags'][] = 'tool';
@@ -133,156 +156,137 @@ function processAccessLog($domain, $file, $posfile) {
             }
         }
     }
-    
+
     file_put_contents($posfile, ftell($fp));
     fclose($fp);
-    
+
     return [$entries, $errors];
 }
 
-/* ---------------------------------------------------
- * Procesar un log de ERRORES
- * --------------------------------------------------- */
+/* ================================================
+ * Procesar ERROR LOG
+ * ================================================ */
 function processErrorLog($domain, $file, $posfile) {
+
     $entries = [];
     $errors = [];
-    $size = @filesize($file);
-    
-    if (!$size) return [$entries, $errors];
-    
-    $last = file_exists($posfile) ? (int)file_get_contents($posfile) : 0;
-    if ($last > $size) $last = 0;
-    
+
+    if (!filesize($file)) return [$entries, $errors];
+
+    // FIX antiduplicados
+    $last = getSafeOffset($file, $posfile);
+
     $fp = @fopen($file, 'r');
     if (!$fp) return [$entries, $errors];
-    
+
     fseek($fp, $last);
-    
+
     while (($line = fgets($fp)) !== false) {
-        // Intentar extraer información del error log
-        // Formato común: [fecha] [nivel] [pid] mensaje
+
         if (preg_match('/\[(.*?)\].*?client[:\s]+(\S+)/', $line, $m)) {
+
             $dt = $m[1];
             $ip = $m[2];
             $ts = date('Y-m-d H:i:s', strtotime($dt));
-            
+
             $entries[] = "$ts | $domain | $ip | ERROR | - | - | - | - | Error: " . trim($line) . "\n";
-            
-            // Contar como error
+
             $errors[$ip]['times'][] = strtotime($dt);
             $errors[$ip]['flags'][] = 'error';
+
         } else {
-            // Log de error sin IP identificable
+
             $ts = date('Y-m-d H:i:s');
             $entries[] = "$ts | $domain | - | ERROR | - | - | - | - | " . trim($line) . "\n";
         }
     }
-    
+
     file_put_contents($posfile, ftell($fp));
     fclose($fp);
-    
+
     return [$entries, $errors];
 }
 
-/* ---------------------------------------------------
- * Procesar un log (detectar tipo automáticamente)
- * --------------------------------------------------- */
+/* ================================================
+ * Elegir tipo de log
+ * ================================================ */
 function processLog($domain, $file, $posfile) {
-    $filename = basename($file);
-    
-    // Determinar tipo de log por el nombre
-    if (stripos($filename, 'error') !== false) {
-        return processErrorLog($domain, $file, $posfile);
-    } else {
-        return processAccessLog($domain, $file, $posfile);
-    }
+    return (stripos(basename($file), 'error') !== false)
+        ? processErrorLog($domain, $file, $posfile)
+        : processAccessLog($domain, $file, $posfile);
 }
 
-/* ---------------------------------------------------
- * Analizar errores y generar alertas/críticas
- * --------------------------------------------------- */
+/* ================================================
+ * Alertas
+ * ================================================ */
 function analyzeAlerts($domain, $errors) {
     global $data_dir, $alert_error_threshold, $critical_error_threshold;
-    
+
     $alert_file = "$data_dir/logguardian_alerts.log";
     $crit_file  = "$data_dir/logguardian_critical.log";
-    
+
     $alerts = 0;
     $criticals = 0;
-    
+
     foreach ($errors as $ip => $data) {
+
         $recent = array_filter($data['times'], fn($t) => $t > time() - 600);
         $count = count($recent);
         $flags = array_unique($data['flags'] ?? []);
-        
+
         $ts = date('Y-m-d H:i:s');
-        
+
         if ($count >= $critical_error_threshold || in_array('tool', $flags)) {
-            $msg = "$ts | [$domain] $ip | errores recientes ($count en 10min), posible herramienta o ataque crítico detectado\n";
-            file_put_contents($crit_file, $msg, FILE_APPEND);
+            file_put_contents($crit_file, "$ts | [$domain] $ip | errores recientes ($count en 10min)\n", FILE_APPEND);
             $criticals++;
         } elseif ($count >= $alert_error_threshold || in_array('bot', $flags)) {
-            $msg = "$ts | [$domain] $ip | actividad sospechosa ($count errores/10min)\n";
-            file_put_contents($alert_file, $msg, FILE_APPEND);
+            file_put_contents($alert_file, "$ts | [$domain] $ip | actividad sospechosa ($count errores)\n", FILE_APPEND);
             $alerts++;
         }
     }
-    
+
     return [$alerts, $criticals];
 }
 
-/* ---------------------------------------------------
- * MAIN EXECUTION
- * --------------------------------------------------- */
+/* ================================================
+ * MAIN
+ * ================================================ */
 try {
-    echo "=== LogGuardianSF v3.7 - Iniciando procesamiento multi-dominio ===\n";
-    echo "Buscando logs en: $vhosts_base\n";
-    echo "Ubicaciones: /domain/logs/ Y /system/domain/logs/\n";
-    echo "Patrones de búsqueda: " . implode(', ', $log_name_patterns) . "\n\n";
-    
+
+    echo "=== LogGuardianSF v3.8 (anti-duplicados) ===\n";
+
     $domains = findDomains($vhosts_base, $log_name_patterns);
-    
+
     if (!$domains) {
-        echo "⚠ ADVERTENCIA: No se encontraron logs.\n";
-        echo "Verificar:\n";
-        echo "  1. Que existan dominios en $vhosts_base\n";
-        echo "  2. Que tengan carpeta /logs o /system/domain/logs\n";
-        echo "  3. Que los archivos de log coincidan con los patrones\n";
-        echo "  4. Que tengas permisos de lectura\n";
+        echo "⚠ No se encontraron logs.\n";
         exit(1);
     }
-    
-    $total = 0; 
-    $alerts = 0; 
-    $criticals = 0; 
-    $suspicious = 0;
+
     $datafile = "$data_dir/logguardian_data.log";
-    
+    $total = $alerts = $criticals = $suspicious = 0;
+
     foreach ($domains as $domain => $logs) {
+
         echo "--- Procesando dominio: $domain ---\n";
-        
+
         foreach ($logs as $log) {
+
             $logname = basename($log);
-            $logpath = dirname($log);
-            echo "  Procesando: $logname";
-            
-            // Mostrar si es de la ubicación system
-            if (strpos($logpath, '/system/') !== false) {
-                echo " [system]";
-            }
-            echo " ... ";
-            
             $pos = "$data_dir/position_" . md5($log) . ".txt";
+
+            echo "  Procesando $logname ... ";
+
             [$entries, $errors] = processLog($domain, $log, $pos);
-            
+
             if ($entries) {
                 file_put_contents($datafile, $entries, FILE_APPEND);
-                echo "✓ " . count($entries) . " entradas\n";
+                echo count($entries) . " nuevas\n";
             } else {
-                echo "⚠ Sin nuevas entradas\n";
+                echo "0 nuevas\n";
             }
-            
+
             [$a, $c] = analyzeAlerts($domain, $errors);
+
             $total += count($entries);
             $alerts += $a;
             $criticals += $c;
@@ -290,23 +294,13 @@ try {
         }
         echo "\n";
     }
-    
-    echo "✅ Procesamiento completado.\n";
-    echo str_repeat("=", 60) . "\n";
-    echo "RESUMEN:\n";
-    echo "  Total de entradas: $total\n";
-    echo "  Alertas generadas: $alerts\n";
-    echo "  Alertas críticas: $criticals\n";
-    echo "  IPs sospechosas: $suspicious\n";
-    echo str_repeat("=", 60) . "\n";
-    echo "\nArchivos generados:\n";
-    echo "  → Datos: $datafile\n";
-    echo "  → Alertas: $data_dir/logguardian_alerts.log\n";
-    echo "  → Críticos: $data_dir/logguardian_critical.log\n";
-    
+
+    echo "✔ Procesamiento completado.\n";
+
 } catch (Throwable $e) {
-    logError("Error fatal: " . $e->getMessage());
+    logError("Fatal: " . $e->getMessage());
     echo "✗ ERROR: " . $e->getMessage() . "\n";
     exit(1);
 }
+
 ?>
